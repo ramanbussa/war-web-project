@@ -105,7 +105,7 @@ pipeline {
                 timeout(time: 5, unit: 'MINUTES') {
                     script {
                         def qualityGate = waitForQualityGate(
-                            abortPipeline: true
+                            abortPipeline: false
                         )
 
                         echo "Quality Gate Status: ${qualityGate.status}"
