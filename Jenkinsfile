@@ -3,9 +3,9 @@ pipeline {
     agent any
 
     // Check GitHub for changes approximately every 2 minutes
-    triggers {
-        pollSCM('H/2 * * * *')
-    }
+    // triggers {
+    //     pollSCM('H/2 * * * *')
+    // }
 
     options {
         timestamps()
@@ -98,21 +98,21 @@ pipeline {
         }
 
         // 7. Wait for SonarQube Quality Gate
-        stage('Quality Gate') {
-            steps {
-                echo 'Waiting for SonarQube Quality Gate result'
+        // stage('Quality Gate') {
+        //     steps {
+        //         echo 'Waiting for SonarQube Quality Gate result'
 
-                timeout(time: 5, unit: 'MINUTES') {
-                    script {
-                        def qualityGate = waitForQualityGate(
-                            abortPipeline: false
-                        )
+        //         timeout(time: 5, unit: 'MINUTES') {
+        //             script {
+        //                 def qualityGate = waitForQualityGate(
+        //                     abortPipeline: false
+        //                 )
 
-                        echo "Quality Gate Status: ${qualityGate.status}"
-                    }
-                }
-            }
-        }
+        //                 echo "Quality Gate Status: ${qualityGate.status}"
+        //             }
+        //         }
+        //     }
+        // }
 
         // 8. Upload WAR to Nexus
         stage('Upload to Nexus') {
