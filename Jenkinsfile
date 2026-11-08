@@ -5,6 +5,7 @@ pipeline {
     options {
         timestamps()
         disableConcurrentBuilds()
+        skipDefaultCheckout(true)
     }
 
     environment {
@@ -20,7 +21,7 @@ pipeline {
 
     stages {
 
-        // Stage 1: Checkout source code
+        // 1. Checkout source code
         stage('Checkout') {
             steps {
                 echo 'Checking out source code from GitHub'
@@ -28,7 +29,7 @@ pipeline {
             }
         }
 
-        // Stage 2: Maven clean
+        // 2. Clean previous build
         stage('Maven Clean') {
             steps {
                 echo 'Cleaning previous build files'
@@ -36,7 +37,7 @@ pipeline {
             }
         }
 
-        // Stage 3: Compile Java code
+        // 3. Compile Java code
         stage('Compile') {
             steps {
                 echo 'Compiling Java source code'
@@ -44,23 +45,35 @@ pipeline {
             }
         }
 
-        // Stage 4: Run unit tests
+        // 4. Execute unit tests
         stage('Unit Tests') {
             steps {
                 echo 'Running unit tests'
                 bat 'mvn test'
             }
-        }
-
-        // Stage 5: Package WAR
-        stage('Package WAR') {
-            steps {
-                echo 'Packaging application into WAR file'
-                bat 'mvn package'
+            post {
+                always {
+                    junit allowEmptyResults: true,
+                          testResults: '**/surefire-reports/TEST-*.xml'
+                }
             }
         }
 
-        // Stage 6: SonarQube analysis
+        // 5. Package WAR file
+        stage('Package WAR') {
+            steps {
+                echo 'Packaging application into WAR file'
+                bat 'mvn package -DskipTests'
+
+                script {
+                    if (!fileExists('target/wwp-1.0.0.war')) {
+                        error 'WAR file was not generated!'
+                    }
+                }
+            }
+        }
+
+        // 6. SonarQube code analysis
         stage('SonarQube Analysis') {
             steps {
                 echo 'Starting SonarQube code analysis'
@@ -71,23 +84,48 @@ pipeline {
                         variable: 'SONAR_TOKEN'
                     )
                 ]) {
-                    bat '''
-                        mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar
-                        if errorlevel 1 exit /b 1
-                    '''
+                    withSonarQubeEnv('SonarQube') {
+                        bat '''
+                            mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar
+
+                            if errorlevel 1 exit /b 1
+                        '''
+                    }
                 }
             }
         }
 
-        // Stage 7: Upload WAR to Nexus
-        stage('Upload to Nexus') {
+        // 7. Wait for SonarQube Quality Gate
+        stage('Quality Gate') {
             steps {
-                echo 'Uploading WAR file to Nexus'
-                bat 'mvn deploy -DskipTests'
+                echo 'Waiting for SonarQube Quality Gate result'
+
+                timeout(time: 5, unit: 'MINUTES') {
+                    script {
+                        def qualityGate = waitForQualityGate(
+                            abortPipeline: true
+                        )
+
+                        echo "Quality Gate Status: ${qualityGate.status}"
+                    }
+                }
             }
         }
 
-        // Stage 8: Archive WAR in Jenkins
+        // 8. Upload WAR to Nexus
+        stage('Upload to Nexus') {
+            steps {
+                echo 'Uploading WAR file to Nexus Repository'
+
+                bat '''
+                    mvn deploy -DskipTests
+
+                    if errorlevel 1 exit /b 1
+                '''
+            }
+        }
+
+        // 9. Archive WAR in Jenkins
         stage('Archive WAR') {
             steps {
                 echo 'Archiving WAR file in Jenkins'
@@ -99,7 +137,7 @@ pipeline {
             }
         }
 
-        // Stage 9: Download WAR from Nexus
+        // 10. Download WAR from Nexus
         stage('Download from Nexus') {
             steps {
                 echo 'Downloading WAR file from Nexus'
@@ -121,12 +159,12 @@ pipeline {
                         exit /b 1
                     )
 
-                    echo WAR downloaded successfully.
+                    echo WAR downloaded successfully from Nexus.
                 '''
             }
         }
 
-        // Stage 10: Deploy application to Tomcat
+        // 11. Deploy WAR to Tomcat
         stage('Deploy to Tomcat') {
             steps {
                 echo 'Deploying WAR file to Tomcat'
@@ -155,10 +193,10 @@ pipeline {
             }
         }
 
-        // Stage 11: Application health check
+        // 12. Application health check
         stage('Health Check') {
             steps {
-                echo 'Checking application health'
+                echo 'Checking deployed application'
 
                 bat '''
                     powershell -NoProfile -Command "$url='http://localhost:8082/wwp/'; for ($i=1; $i -le 10; $i++) { try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10; if ($r.StatusCode -eq 200) { Write-Host 'Application is healthy. HTTP 200'; exit 0 } } catch { Write-Host ('Attempt ' + $i + ' failed') }; Start-Sleep -Seconds 5 }; Write-Host 'Health check failed'; exit 1"
@@ -169,12 +207,12 @@ pipeline {
 
     post {
         success {
-            echo 'SUCCESS: CI/CD Pipeline completed successfully.'
+            echo 'SUCCESS: Complete CI/CD Pipeline executed successfully.'
             echo 'Application URL: http://localhost:8082/wwp/'
         }
 
         failure {
-            echo 'ERROR: Pipeline failed. Check the failed stage.'
+            echo 'ERROR: Pipeline failed. Check the failed stage in Console Output.'
         }
 
         always {
