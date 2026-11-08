@@ -20,6 +20,7 @@ pipeline {
 
     stages {
 
+        // Stage 1: Checkout source code
         stage('Checkout') {
             steps {
                 echo 'Checking out source code from GitHub'
@@ -27,26 +28,82 @@ pipeline {
             }
         }
 
-        stage('Build, SonarQube Analysis and Nexus Upload') {
+        // Stage 2: Maven clean
+        stage('Maven Clean') {
             steps {
-                echo 'Building application, analyzing code and uploading WAR'
-
-                bat '''
-                    mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar deploy
-                    if errorlevel 1 exit /b 1
-                '''
+                echo 'Cleaning previous build files'
+                bat 'mvn clean'
             }
         }
 
+        // Stage 3: Compile Java code
+        stage('Compile') {
+            steps {
+                echo 'Compiling Java source code'
+                bat 'mvn compile'
+            }
+        }
+
+        // Stage 4: Run unit tests
+        stage('Unit Tests') {
+            steps {
+                echo 'Running unit tests'
+                bat 'mvn test'
+            }
+        }
+
+        // Stage 5: Package WAR
+        stage('Package WAR') {
+            steps {
+                echo 'Packaging application into WAR file'
+                bat 'mvn package'
+            }
+        }
+
+        // Stage 6: SonarQube analysis
+        stage('SonarQube Analysis') {
+            steps {
+                echo 'Starting SonarQube code analysis'
+
+                withCredentials([
+                    string(
+                        credentialsId: 'sonar-token',
+                        variable: 'SONAR_TOKEN'
+                    )
+                ]) {
+                    bat '''
+                        mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar
+                        if errorlevel 1 exit /b 1
+                    '''
+                }
+            }
+        }
+
+        // Stage 7: Upload WAR to Nexus
+        stage('Upload to Nexus') {
+            steps {
+                echo 'Uploading WAR file to Nexus'
+                bat 'mvn deploy -DskipTests'
+            }
+        }
+
+        // Stage 8: Archive WAR in Jenkins
         stage('Archive WAR') {
             steps {
-                archiveArtifacts artifacts: 'target/wwp-1.0.0.war',
-                                 fingerprint: true
+                echo 'Archiving WAR file in Jenkins'
+
+                archiveArtifacts(
+                    artifacts: 'target/wwp-1.0.0.war',
+                    fingerprint: true
+                )
             }
         }
 
-        stage('Download WAR from Nexus') {
+        // Stage 9: Download WAR from Nexus
+        stage('Download from Nexus') {
             steps {
+                echo 'Downloading WAR file from Nexus'
+
                 bat '''
                     if not exist deployment mkdir deployment
 
@@ -55,7 +112,7 @@ pipeline {
                       "%NEXUS_URL%/%NEXUS_WAR%"
 
                     if errorlevel 1 (
-                        echo ERROR: WAR download from Nexus failed.
+                        echo ERROR: Nexus download failed.
                         exit /b 1
                     )
 
@@ -64,13 +121,16 @@ pipeline {
                         exit /b 1
                     )
 
-                    echo WAR downloaded successfully from Nexus.
+                    echo WAR downloaded successfully.
                 '''
             }
         }
 
+        // Stage 10: Deploy application to Tomcat
         stage('Deploy to Tomcat') {
             steps {
+                echo 'Deploying WAR file to Tomcat'
+
                 withCredentials([
                     usernamePassword(
                         credentialsId: 'tomcat-credentials',
@@ -79,8 +139,6 @@ pipeline {
                     )
                 ]) {
                     bat '''
-                        echo Starting Tomcat WAR deployment...
-
                         curl.exe --fail --silent --show-error ^
                           --user "%TOMCAT_USR%:%TOMCAT_PSW%" ^
                           --upload-file "deployment\\wwp-1.0.0.war" ^
@@ -91,18 +149,19 @@ pipeline {
                             exit /b 1
                         )
 
-                        echo WAR deployment completed successfully!
+                        echo Tomcat deployment successful.
                     '''
                 }
             }
         }
 
-        stage('Application Health Check') {
+        // Stage 11: Application health check
+        stage('Health Check') {
             steps {
-                echo 'Checking deployed application'
+                echo 'Checking application health'
 
                 bat '''
-                    powershell -NoProfile -Command "$url='http://localhost:8082/wwp/'; for ($i=1; $i -le 10; $i++) { try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10; if ($r.StatusCode -eq 200) { Write-Host 'Application is healthy. HTTP 200'; exit 0 } } catch { Write-Host ('Attempt ' + $i + ' failed') }; Start-Sleep -Seconds 5 }; Write-Host 'Application health check failed'; exit 1"
+                    powershell -NoProfile -Command "$url='http://localhost:8082/wwp/'; for ($i=1; $i -le 10; $i++) { try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10; if ($r.StatusCode -eq 200) { Write-Host 'Application is healthy. HTTP 200'; exit 0 } } catch { Write-Host ('Attempt ' + $i + ' failed') }; Start-Sleep -Seconds 5 }; Write-Host 'Health check failed'; exit 1"
                 '''
             }
         }
@@ -110,12 +169,12 @@ pipeline {
 
     post {
         success {
-            echo 'SUCCESS: Complete CI/CD pipeline finished.'
-            echo 'Application deployed at http://localhost:8082/wwp/'
+            echo 'SUCCESS: CI/CD Pipeline completed successfully.'
+            echo 'Application URL: http://localhost:8082/wwp/'
         }
 
         failure {
-            echo 'ERROR: Pipeline failed. Check the failed stage in Console Output.'
+            echo 'ERROR: Pipeline failed. Check the failed stage.'
         }
 
         always {
