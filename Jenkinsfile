@@ -2,6 +2,11 @@
 pipeline {
     agent any
 
+    // Check GitHub for changes approximately every 2 minutes
+    triggers {
+        pollSCM('H/2 * * * *')
+    }
+
     options {
         timestamps()
         disableConcurrentBuilds()
@@ -53,8 +58,10 @@ pipeline {
             }
             post {
                 always {
-                    junit allowEmptyResults: true,
-                          testResults: '**/surefire-reports/TEST-*.xml'
+                    junit(
+                        allowEmptyResults: true,
+                        testResults: '**/surefire-reports/TEST-*.xml'
+                    )
                 }
             }
         }
@@ -78,19 +85,14 @@ pipeline {
             steps {
                 echo 'Starting SonarQube code analysis'
 
-                withCredentials([
-                    string(
-                        credentialsId: 'sonar-token',
-                        variable: 'SONAR_TOKEN'
-                    )
-                ]) {
-                    withSonarQubeEnv('SonarQube') {
-                        bat '''
-                            mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar
+                // Must match the configured installation name:
+                // SonarQube-Server
+                withSonarQubeEnv('SonarQube-Server') {
+                    bat '''
+                        mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar
 
-                            if errorlevel 1 exit /b 1
-                        '''
-                    }
+                        if errorlevel 1 exit /b 1
+                    '''
                 }
             }
         }
