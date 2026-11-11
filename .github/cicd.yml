@@ -1,0 +1,208 @@
+
+name: WWP CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+  # Check GitHub for changes every 2 minutes
+  # GitHub Actions minimum schedule interval is 5 minutes
+  schedule:
+    - cron: '*/5 * * * *'
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wwp-cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NEXUS_URL: http://localhost:8081/repository/maven-releases
+  NEXUS_WAR: koddas/web/war/wwp/1.0.0/wwp-1.0.0.war
+
+  TOMCAT_URL: http://localhost:8082
+  TOMCAT_CONTEXT: /wwp
+
+  WAR_FILE: wwp-1.0.0.war
+  SONAR_PROJECT: wwp
+
+jobs:
+
+  build-and-deploy:
+
+    runs-on: self-hosted
+
+    steps:
+
+      # 1. Checkout source code
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 2. Configure Java and Maven
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # 3. Maven Clean
+      - name: Maven Clean
+        run: mvn clean
+
+      # 4. Compile
+      - name: Compile
+        run: mvn compile
+
+      # 5. Unit Tests
+      - name: Unit Tests
+        run: mvn test
+
+      # Publish test results even if tests fail
+      - name: Publish Test Results
+        if: always()
+        uses: dorny/test-reporter@v2
+        with:
+          name: Maven Unit Tests
+          path: '**/surefire-reports/TEST-*.xml'
+          reporter: java-junit
+          fail-on-error: false
+
+      # 6. Package WAR
+      - name: Package WAR
+        run: mvn package -DskipTests
+
+      - name: Verify WAR File
+        shell: pwsh
+        run: |
+          if (!(Test-Path "target/wwp-1.0.0.war")) {
+            throw "WAR file was not generated!"
+          }
+
+          Write-Host "WAR file generated successfully."
+
+      # 7. SonarQube Analysis
+      - name: SonarQube Analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar `
+            "-Dsonar.projectKey=wwp" `
+            "-Dsonar.host.url=$env:SONAR_HOST_URL" `
+            "-Dsonar.token=$env:SONAR_TOKEN"
+
+      # 8. Upload WAR to Nexus
+      - name: Upload WAR to Nexus
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          mvn deploy -DskipTests `
+            "-Dnexus.username=$env:NEXUS_USERNAME" `
+            "-Dnexus.password=$env:NEXUS_PASSWORD"
+
+      # 9. Archive WAR in GitHub Actions
+      - name: Archive WAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: wwp-war
+          path: target/wwp-1.0.0.war
+          if-no-files-found: error
+          retention-days: 7
+
+      # 10. Download WAR from Nexus
+      - name: Download WAR from Nexus
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path deployment
+
+          $url = "$env:NEXUS_URL/$env:NEXUS_WAR"
+
+          curl.exe --fail --location --silent --show-error `
+            --user "$env:NEXUS_USERNAME`:$env:NEXUS_PASSWORD" `
+            --output "deployment/wwp-1.0.0.war" `
+            $url
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Nexus download failed."
+          }
+
+          if (!(Test-Path "deployment/wwp-1.0.0.war")) {
+            throw "WAR file not found."
+          }
+
+          Write-Host "WAR downloaded successfully."
+
+      # 11. Deploy WAR to Tomcat
+      - name: Deploy to Tomcat
+        env:
+          TOMCAT_USERNAME: ${{ secrets.TOMCAT_USERNAME }}
+          TOMCAT_PASSWORD: ${{ secrets.TOMCAT_PASSWORD }}
+        shell: pwsh
+        run: |
+          $war = "deployment/wwp-1.0.0.war"
+
+          $url = "$env:TOMCAT_URL/manager/text/deploy?path=$env:TOMCAT_CONTEXT&update=true"
+
+          curl.exe --fail --silent --show-error `
+            --user "$env:TOMCAT_USERNAME`:$env:TOMCAT_PASSWORD" `
+            --upload-file $war `
+            $url
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Tomcat deployment failed."
+          }
+
+          Write-Host "Tomcat deployment successful."
+
+      # 12. Application Health Check
+      - name: Application Health Check
+        shell: pwsh
+        run: |
+          $url = "$env:TOMCAT_URL$env:TOMCAT_CONTEXT/"
+
+          for ($i = 1; $i -le 10; $i++) {
+            try {
+              $response = Invoke-WebRequest `
+                -Uri $url `
+                -UseBasicParsing `
+                -TimeoutSec 10
+
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Application is healthy. HTTP 200"
+                exit 0
+              }
+            }
+            catch {
+              Write-Host "Attempt $i failed"
+            }
+
+            Start-Sleep -Seconds 5
+          }
+
+          throw "Application health check failed."
+
+      # Final success message
+      - name: Pipeline Success
+        if: success()
+        run: |
+          Write-Host "SUCCESS: Complete CI/CD Pipeline executed successfully."
+          Write-Host "Application URL: http://localhost:8082/wwp/"
+
+      # Final failure message
+      - name: Pipeline Failure
+        if: failure()
+        run: |
+          Write-Host "ERROR: Pipeline failed. Check GitHub Actions logs."
