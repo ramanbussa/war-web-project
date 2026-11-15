@@ -173,36 +173,51 @@ pipeline {
         }
 
 
-        stage('Push to Docker Hub') {
-            steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-credentials',
-                        usernameVariable: 'DOCKERHUB_USER',
-                        passwordVariable: 'DOCKERHUB_TOKEN'
-                    )
-                ]) {
-                    powershell '''
-                        $ErrorActionPreference = 'Stop'
+        
+stage('Push to Docker Hub') {
+    steps {
+        withCredentials([
+            usernamePassword(
+                credentialsId: 'dockerhub-credentials',
+                usernameVariable: 'DOCKERHUB_USER',
+                passwordVariable: 'DOCKERHUB_TOKEN'
+            )
+        ]) {
+            powershell '''
+                $ErrorActionPreference = 'Stop'
 
-                        $env:DOCKERHUB_TOKEN |
-                            & $env:DOCKER_EXE login -u $env:DOCKERHUB_USER --password-stdin
+                $username = $env:DOCKERHUB_USER.Trim()
+                $token = $env:DOCKERHUB_TOKEN.Trim()
 
-                        if ($LASTEXITCODE -ne 0) {
-                            throw 'Docker Hub login failed. Check Jenkins credentials.'
-                        }
+                Write-Host "Docker Hub username: $username"
+                Write-Host "Token received: $(-not [string]::IsNullOrWhiteSpace($token))"
+                Write-Host "Token length: $($token.Length)"
 
-                        & $env:DOCKER_EXE push $env:DOCKER_IMAGE
-
-                        if ($LASTEXITCODE -ne 0) {
-                            throw 'Docker Hub push failed.'
-                        }
-
-                        & $env:DOCKER_EXE logout
-                    '''
+                if ([string]::IsNullOrWhiteSpace($token)) {
+                    throw "Docker Hub token is empty."
                 }
-            }
+
+                $token | & $env:DOCKER_EXE login -u $username --password-stdin
+
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Docker Hub login failed."
+                }
+
+                Write-Host "Docker Hub login successful."
+
+                & $env:DOCKER_EXE push $env:DOCKER_IMAGE
+
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Docker Hub push failed."
+                }
+
+                Write-Host "Docker image pushed successfully."
+
+                & $env:DOCKER_EXE logout
+            '''
         }
+    }
+}
 
         stage('Run Docker Container') {
             steps {
