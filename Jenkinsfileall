@@ -1,0 +1,265 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
+    }
+
+    parameters {
+        choice(name: 'DEPLOY_TARGET',
+               choices: ['ALL', 'TOMCAT', 'DOCKER', 'KUBERNETES'],
+               description: 'Choose one deployment target or ALL three.')
+    }
+
+    environment {
+        NEXUS_URL        = 'http://localhost:8081/repository/maven-releases'
+        NEXUS_WAR        = 'koddas/web/war/wwp/1.0.0/wwp-1.0.0.war'
+        WAR_FILE         = 'wwp-1.0.0.war'
+
+        TOMCAT_URL       = 'http://localhost:8082'
+        TOMCAT_CONTEXT   = '/wwp'
+
+        SONAR_PROJECT    = 'wwp'
+
+        DOCKER_EXE       = 'C:/Users/Bussa/AppData/Local/Programs/DockerDesktop/resources/bin/docker.exe'
+        DOCKER_IMAGE     = 'bussar/wwp:1.0.0'
+        DOCKER_CONTAINER = 'wwp-container'
+        DOCKER_PORT      = '8083'
+
+        KUBECTL_EXE      = 'C:/Users/Bussa/AppData/Local/Programs/DockerDesktop/resources/bin/kubectl.exe'
+        KUBECONFIG       = 'C:/Users/Bussa/.kube/config'
+        K8S_MANIFEST     = 'k8s/deploy.yml'
+        K8S_DEPLOYMENT   = 'mywarweb-deployment'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Verify Environment') {
+            steps {
+                bat '''
+                    java -version
+                    if errorlevel 1 exit /b 1
+                    mvn -version
+                    if errorlevel 1 exit /b 1
+
+                    if not exist "%DOCKER_EXE%" (
+                        echo ERROR: Docker executable not found.
+                        exit /b 1
+                    )
+                    "%DOCKER_EXE%" --version
+                    if errorlevel 1 exit /b 1
+                    "%DOCKER_EXE%" info >NUL
+                    if errorlevel 1 (
+                        echo ERROR: Docker Engine is not running.
+                        exit /b 1
+                    )
+
+                    if not exist "%KUBECTL_EXE%" (
+                        echo ERROR: kubectl executable not found.
+                        exit /b 1
+                    )
+                    if not exist "%KUBECONFIG%" (
+                        echo ERROR: kubeconfig not found.
+                        exit /b 1
+                    )
+                '''
+            }
+        }
+
+        stage('Build WAR') {
+            steps {
+                bat 'mvn clean package -DskipTests'
+                script {
+                    if (!fileExists('target/wwp-1.0.0.war')) {
+                        error 'WAR file was not generated!'
+                    }
+                    echo 'SUCCESS: WAR file generated.'
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('SonarQube-Server') {
+                    bat '''
+                        mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar -Dsonar.projectKey=%SONAR_PROJECT%
+                        if errorlevel 1 exit /b 1
+                    '''
+                }
+            }
+        }
+
+        stage('Upload to Nexus') {
+            steps {
+                bat '''
+                    mvn deploy -DskipTests
+                    if errorlevel 1 exit /b 1
+                '''
+            }
+        }
+
+        stage('Archive WAR') {
+            steps {
+                archiveArtifacts(artifacts: 'target/wwp-1.0.0.war', fingerprint: true)
+            }
+        }
+
+        stage('Deploy to Tomcat') {
+            when {
+                expression { params.DEPLOY_TARGET in ['ALL', 'TOMCAT'] }
+            }
+            steps {
+                bat '''
+                    if not exist deployment mkdir deployment
+                    curl.exe --fail --location --silent --show-error ^
+                        --output "deployment\\%WAR_FILE%" ^
+                        "%NEXUS_URL%/%NEXUS_WAR%"
+                    if errorlevel 1 (
+                        echo ERROR: Nexus download failed.
+                        exit /b 1
+                    )
+                '''
+                withCredentials([
+                    usernamePassword(credentialsId: 'tomcat-credentials',
+                                     usernameVariable: 'TOMCAT_USR',
+                                     passwordVariable: 'TOMCAT_PSW')
+                ]) {
+                    bat '''
+                        curl.exe --fail --silent --show-error ^
+                            --user "%TOMCAT_USR%:%TOMCAT_PSW%" ^
+                            --upload-file "deployment\\%WAR_FILE%" ^
+                            "%TOMCAT_URL%/manager/text/deploy?path=%TOMCAT_CONTEXT%&update=true"
+                        if errorlevel 1 (
+                            echo ERROR: Tomcat deployment failed.
+                            exit /b 1
+                        )
+                    '''
+                }
+                bat '''
+                    powershell -NoProfile -Command "$url='http://localhost:8082/wwp/'; for ($i=1; $i -le 12; $i++) { try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10; if ($r.StatusCode -eq 200) { Write-Host 'Tomcat application is healthy'; exit 0 } } catch { Write-Host ('Attempt ' + $i + ' failed') }; Start-Sleep -Seconds 5 }; throw 'Tomcat health check failed'"
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            when {
+                expression { params.DEPLOY_TARGET in ['ALL', 'DOCKER', 'KUBERNETES'] }
+            }
+            steps {
+                bat '''
+                    "%DOCKER_EXE%" build --pull -t "%DOCKER_IMAGE%" .
+                    if errorlevel 1 (
+                        echo ERROR: Docker image build failed.
+                        exit /b 1
+                    )
+                '''
+            }
+        }
+
+        stage('Push Image to Docker Hub') {
+            when {
+                expression { params.DEPLOY_TARGET in ['ALL', 'DOCKER', 'KUBERNETES'] }
+            }
+            steps {
+                withCredentials([
+                    usernamePassword(credentialsId: 'dockerhub-credentials',
+                                     usernameVariable: 'DOCKERHUB_USER',
+                                     passwordVariable: 'DOCKERHUB_TOKEN')
+                ]) {
+                    bat '''
+                        @echo off
+                        echo(%DOCKERHUB_TOKEN%| "%DOCKER_EXE%" login -u "%DOCKERHUB_USER%" --password-stdin
+                        if errorlevel 1 (
+                            echo ERROR: Docker Hub login failed.
+                            exit /b 1
+                        )
+                        "%DOCKER_EXE%" push "%DOCKER_IMAGE%"
+                        if errorlevel 1 (
+                            "%DOCKER_EXE%" logout
+                            echo ERROR: Docker Hub push failed.
+                            exit /b 1
+                        )
+                        "%DOCKER_EXE%" logout
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Docker') {
+            when {
+                expression { params.DEPLOY_TARGET in ['ALL', 'DOCKER'] }
+            }
+            steps {
+                bat '''
+                    "%DOCKER_EXE%" pull "%DOCKER_IMAGE%"
+                    if errorlevel 1 exit /b 1
+                    "%DOCKER_EXE%" rm -f "%DOCKER_CONTAINER%" >NUL 2>&1
+                    "%DOCKER_EXE%" run -d --name "%DOCKER_CONTAINER%" --restart unless-stopped -p %DOCKER_PORT%:8080 "%DOCKER_IMAGE%"
+                    if errorlevel 1 (
+                        echo ERROR: Docker container failed to start.
+                        exit /b 1
+                    )
+                '''
+                bat '''
+                    powershell -NoProfile -Command "$url='http://localhost:8083/wwp/'; for ($i=1; $i -le 12; $i++) { try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10; if ($r.StatusCode -eq 200) { Write-Host 'Docker application is healthy'; exit 0 } } catch { Write-Host ('Attempt ' + $i + ' failed') }; Start-Sleep -Seconds 5 }; throw 'Docker health check failed'"
+                '''
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            when {
+                expression { params.DEPLOY_TARGET in ['ALL', 'KUBERNETES'] }
+            }
+            steps {
+                bat '''
+                    if not exist "%K8S_MANIFEST%" (
+                        echo ERROR: Kubernetes manifest not found.
+                        exit /b 1
+                    )
+                    set KUBECONFIG=%KUBECONFIG%
+                    "%KUBECTL_EXE%" config current-context
+                    if errorlevel 1 exit /b 1
+                    "%KUBECTL_EXE%" get nodes
+                    if errorlevel 1 exit /b 1
+                    "%KUBECTL_EXE%" apply -f "%K8S_MANIFEST%"
+                    if errorlevel 1 (
+                        echo ERROR: Kubernetes deployment failed.
+                        exit /b 1
+                    )
+                    "%KUBECTL_EXE%" rollout status deployment/%K8S_DEPLOYMENT% --timeout=180s
+                    if errorlevel 1 (
+                        "%KUBECTL_EXE%" describe deployment %K8S_DEPLOYMENT%
+                        "%KUBECTL_EXE%" get pods
+                        exit /b 1
+                    )
+                    "%KUBECTL_EXE%" get deployments
+                    "%KUBECTL_EXE%" get pods
+                    "%KUBECTL_EXE%" get services
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "SUCCESS: Pipeline completed for target: ${params.DEPLOY_TARGET}"
+            echo 'Tomcat URL: http://localhost:8082/wwp/'
+            echo 'Docker URL: http://localhost:8083/wwp/'
+            echo 'Docker image: bussar/wwp:1.0.0'
+            echo 'Kubernetes URL (if NodePort 30080 is configured): http://localhost:30080/wwp/'
+        }
+        failure {
+            echo 'ERROR: Pipeline failed. Check the failed stage in Console Output.'
+        }
+        always {
+            echo 'Pipeline execution completed.'
+        }
+    }
+}
