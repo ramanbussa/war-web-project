@@ -244,6 +244,31 @@ stage('Push to Docker Hub') {
                 '''
             }
         }
+
+        
+stage('Verify Kubernetes Access') {
+    steps {
+        echo 'Verifying Kubernetes access from Jenkins'
+
+        bat '''
+            echo ===== Check kubectl =====
+            "%KUBECTL_EXE%" version --client
+
+            echo ===== Check kubeconfig =====
+            if not exist "%KUBECONFIG%" (
+                echo ERROR: kubeconfig not found.
+                exit /b 1
+            )
+
+            echo ===== Check Kubernetes Context =====
+            "%KUBECTL_EXE%" config current-context
+
+            echo ===== Check Kubernetes Nodes =====
+            "%KUBECTL_EXE%" get nodes
+        '''
+    }
+}
+
          
         // 18. Deploy application to Kubernetes
         stage('Deploy to Kubernetes') {
