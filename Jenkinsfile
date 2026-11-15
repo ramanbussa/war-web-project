@@ -173,6 +173,35 @@ pipeline {
         }
 
 
+stage('Test Docker Hub Authentication') {
+    steps {
+        withCredentials([
+            usernamePassword(
+                credentialsId: 'dockerhub-credentials',
+                usernameVariable: 'DH_USER',
+                passwordVariable: 'DH_TOKEN'
+            )
+        ]) {
+            powershell '''
+                $user = $env:DH_USER.Trim()
+                $token = $env:DH_TOKEN.Trim()
+
+                Write-Host "Username: $user"
+                Write-Host "Token length: $($token.Length)"
+
+                $token | & $env:DOCKER_EXE login -u $user --password-stdin
+
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Docker Hub authentication failed."
+                }
+
+                Write-Host "Docker Hub authentication successful."
+                & $env:DOCKER_EXE logout
+            '''
+        }
+    }
+}
+
         
 stage('Push to Docker Hub') {
     steps {
