@@ -259,40 +259,36 @@ pipeline {
 
         // 15. Push Docker Image to Docker Hub
         stage('Push to Docker Hub') {
-            steps {
-                echo 'Pushing Docker image to Docker Hub'
+    steps {
+        echo 'Pushing Docker image to Docker Hub'
 
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-credentials',
-                        usernameVariable: 'DOCKERHUB_USR',
-                        passwordVariable: 'DOCKERHUB_PSW'
-                    )
-                ]) {
-                    bat '''
-                        echo %DOCKERHUB_PSW% | "%DOCKER_EXE%" login ^
-                            -u "%DOCKERHUB_USR%" ^
-                            --password-stdin
+        withCredentials([
+            usernamePassword(
+                credentialsId: 'dockerhub-credentials',
+                usernameVariable: 'DOCKERHUB_USER',
+                passwordVariable: 'DOCKERHUB_TOKEN'
+            )
+        ]) {
+            bat '''
+                echo %DOCKERHUB_TOKEN% | "%DOCKER_EXE%" login -u "%DOCKERHUB_USER%" --password-stdin
 
-                        if errorlevel 1 (
-                            echo ERROR: Docker Hub login failed.
-                            exit /b 1
-                        )
+                if errorlevel 1 (
+                    echo ERROR: Docker Hub login failed.
+                    exit /b 1
+                )
 
-                        "%DOCKER_EXE%" push "%DOCKER_IMAGE%"
+                "%DOCKER_EXE%" push "%DOCKER_IMAGE%"
 
-                        if errorlevel 1 (
-                            echo ERROR: Docker image push failed.
-                            "%DOCKER_EXE%" logout
-                            exit /b 1
-                        )
+                if errorlevel 1 (
+                    echo ERROR: Docker image push failed.
+                    exit /b 1
+                )
 
-                        echo Docker image uploaded successfully.
-                        "%DOCKER_EXE%" logout
-                    '''
-                }
-            }
+                "%DOCKER_EXE%" logout
+            '''
         }
+    }
+}
 
         // 16. Pull image and create Docker container
         stage('Run Docker Container') {
