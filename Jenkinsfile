@@ -14,14 +14,22 @@ pipeline {
     }
 
     environment {
+        // Nexus Configuration
         NEXUS_URL = 'http://localhost:8081/repository/maven-releases'
         NEXUS_WAR = 'koddas/web/war/wwp/1.0.0/wwp-1.0.0.war'
 
+        // Tomcat Configuration
         TOMCAT_URL = 'http://localhost:8082'
         TOMCAT_CONTEXT = '/wwp'
 
+        // Application Configuration
         WAR_FILE = 'wwp-1.0.0.war'
         SONAR_PROJECT = 'wwp'
+
+        // Docker Hub Configuration
+        DOCKER_IMAGE = 'bussar/wwp:1.0.0'
+        DOCKER_CONTAINER = 'wwp-container'
+        DOCKER_PORT = '8083'
     }
 
     stages {
@@ -70,6 +78,7 @@ pipeline {
         stage('Package WAR') {
             steps {
                 echo 'Packaging application into WAR file'
+
                 bat 'mvn package -DskipTests'
 
                 script {
@@ -85,8 +94,6 @@ pipeline {
             steps {
                 echo 'Starting SonarQube code analysis'
 
-                // Must match the configured installation name:
-                // SonarQube-Server
                 withSonarQubeEnv('SonarQube-Server') {
                     bat '''
                         mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar
@@ -98,16 +105,17 @@ pipeline {
         }
 
         // 7. Wait for SonarQube Quality Gate
+        // Enable after configuring SonarQube webhook
         // stage('Quality Gate') {
         //     steps {
         //         echo 'Waiting for SonarQube Quality Gate result'
-
+        //
         //         timeout(time: 5, unit: 'MINUTES') {
         //             script {
         //                 def qualityGate = waitForQualityGate(
         //                     abortPipeline: false
         //                 )
-
+        //
         //                 echo "Quality Gate Status: ${qualityGate.status}"
         //             }
         //         }
@@ -195,22 +203,127 @@ pipeline {
             }
         }
 
-        // 12. Application health check
+        // 12. Tomcat application health check
         stage('Health Check') {
             steps {
-                echo 'Checking deployed application'
+                echo 'Checking deployed Tomcat application'
 
                 bat '''
-                    powershell -NoProfile -Command "$url='http://localhost:8082/wwp/'; for ($i=1; $i -le 10; $i++) { try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10; if ($r.StatusCode -eq 200) { Write-Host 'Application is healthy. HTTP 200'; exit 0 } } catch { Write-Host ('Attempt ' + $i + ' failed') }; Start-Sleep -Seconds 5 }; Write-Host 'Health check failed'; exit 1"
+                    powershell -NoProfile -Command "$url='http://localhost:8082/wwp/'; for ($i=1; $i -le 10; $i++) { try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10; if ($r.StatusCode -eq 200) { Write-Host 'Tomcat application is healthy. HTTP 200'; exit 0 } } catch { Write-Host ('Attempt ' + $i + ' failed') }; Start-Sleep -Seconds 5 }; Write-Host 'Tomcat health check failed'; exit 1"
+                '''
+            }
+        }
+
+        // 13. Build Docker Image
+        stage('Docker Build') {
+            steps {
+                echo 'Building Docker image'
+
+                bat '''
+                    docker build --pull -t "%DOCKER_IMAGE%" .
+
+                    if errorlevel 1 (
+                        echo ERROR: Docker image build failed.
+                        exit /b 1
+                    )
+
+                    echo Docker image built successfully.
+                '''
+            }
+        }
+
+        // 14. Push Docker Image to Docker Hub
+        stage('Push to Docker Hub') {
+            steps {
+                echo 'Pushing Docker image to Docker Hub'
+
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKERHUB_USR',
+                        passwordVariable: 'DOCKERHUB_PSW'
+                    )
+                ]) {
+                    bat '''
+                        echo %DOCKERHUB_PSW% | docker login ^
+                            -u "%DOCKERHUB_USR%" ^
+                            --password-stdin
+
+                        if errorlevel 1 (
+                            echo ERROR: Docker Hub login failed.
+                            exit /b 1
+                        )
+
+                        docker push "%DOCKER_IMAGE%"
+
+                        if errorlevel 1 (
+                            echo ERROR: Docker image push failed.
+                            exit /b 1
+                        )
+
+                        echo Docker image uploaded successfully.
+
+                        docker logout
+                    '''
+                }
+            }
+        }
+
+        // 15. Pull image and create Docker container
+        stage('Run Docker Container') {
+            steps {
+                echo 'Pulling Docker image from Docker Hub'
+
+                bat '''
+                    docker pull "%DOCKER_IMAGE%"
+
+                    if errorlevel 1 (
+                        echo ERROR: Docker image pull failed.
+                        exit /b 1
+                    )
+
+                    echo Docker image downloaded successfully.
+
+                    docker rm -f "%DOCKER_CONTAINER%" >NUL 2>&1
+
+                    docker run -d ^
+                        --name "%DOCKER_CONTAINER%" ^
+                        --restart unless-stopped ^
+                        -p %DOCKER_PORT%:8080 ^
+                        "%DOCKER_IMAGE%"
+
+                    if errorlevel 1 (
+                        echo ERROR: Docker container creation failed.
+                        exit /b 1
+                    )
+
+                    echo Docker container started successfully.
+                '''
+            }
+        }
+
+        // 16. Docker application health check
+        stage('Docker Health Check') {
+            steps {
+                echo 'Checking Docker application'
+
+                bat '''
+                    powershell -NoProfile -Command "$url='http://localhost:8083/wwp/'; for ($i=1; $i -le 12; $i++) { try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10; if ($r.StatusCode -eq 200) { Write-Host 'Docker application is healthy. HTTP 200'; exit 0 } } catch { Write-Host ('Attempt ' + $i + ' failed') }; Start-Sleep -Seconds 5 }; Write-Host 'Docker health check failed'; exit 1"
                 '''
             }
         }
     }
 
+    // Post build actions
     post {
         success {
             echo 'SUCCESS: Complete CI/CD Pipeline executed successfully.'
-            echo 'Application URL: http://localhost:8082/wwp/'
+
+            echo 'Tomcat Application: http://localhost:8082/wwp/'
+
+            echo 'Docker Application: http://localhost:8083/wwp/'
+
+            echo 'Docker Image: Docker Hub / wwp:1.0.0'
         }
 
         failure {
