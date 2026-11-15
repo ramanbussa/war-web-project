@@ -26,7 +26,8 @@ pipeline {
         DOCKER_IMAGE     = 'bussar/wwp:1.0.0'
         DOCKER_CONTAINER = 'wwp-container'
         DOCKER_PORT      = '8083'
-        //kubernetes
+        
+        KUBECTL_EXE = 'C:/Users/Bussa/AppData/Local/Programs/DockerDesktop/resources/bin/kubectl.exe'
         KUBECONFIG = 'C:/Users/Bussa/.kube/config'
     }
 
