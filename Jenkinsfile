@@ -26,6 +26,8 @@ pipeline {
         DOCKER_IMAGE     = 'bussar/wwp:1.0.0'
         DOCKER_CONTAINER = 'wwp-container'
         DOCKER_PORT      = '8083'
+        //kubernetes
+        KUBECONFIG = 'C:/Users/Bussa/.kube/config'
     }
 
     stages {
@@ -241,6 +243,71 @@ stage('Push to Docker Hub') {
                 '''
             }
         }
+         
+        // 18. Deploy application to Kubernetes
+        stage('Deploy to Kubernetes') {
+            steps {
+                echo 'Deploying application to Docker Desktop Kubernetes'
+
+                bat '''
+                    echo ===== Verify Kubernetes CLI =====
+                    where kubectl
+
+                    if errorlevel 1 (
+                        echo ERROR: kubectl is not available to Jenkins.
+                        exit /b 1
+                    )
+
+                    echo ===== Verify Kubernetes Context =====
+                    kubectl config current-context
+
+                    if errorlevel 1 (
+                        echo ERROR: Jenkins cannot access Kubernetes configuration.
+                        exit /b 1
+                    )
+
+                    echo ===== Verify Kubernetes Node =====
+                    kubectl get nodes
+
+                    if errorlevel 1 (
+                        echo ERROR: Kubernetes cluster is not accessible.
+                        exit /b 1
+                    )
+
+                    echo ===== Verify Deployment YAML =====
+                    if not exist "k8s\\deploy.yml" (
+                        echo ERROR: k8s/deploy.yml file not found.
+                        exit /b 1
+                    )
+
+                    echo ===== Apply Kubernetes Manifest =====
+                    kubectl apply -f k8s/deploy.yml
+
+                    if errorlevel 1 (
+                        echo ERROR: Kubernetes deployment failed.
+                        exit /b 1
+                    )
+
+                    echo ===== Wait for Deployment =====
+                    kubectl rollout status deployment/mywarweb-deployment --timeout=180s
+
+                    if errorlevel 1 (
+                        echo ERROR: Kubernetes rollout failed.
+                        kubectl describe deployment mywarweb-deployment
+                        kubectl get pods
+                        exit /b 1
+                    )
+
+                    echo ===== Kubernetes Deployment Status =====
+                    kubectl get deployments
+                    kubectl get pods
+                    kubectl get services
+
+                    echo Kubernetes deployment completed successfully.
+                '''
+            }
+        }
+
     }
 
     post {
@@ -249,6 +316,8 @@ stage('Push to Docker Hub') {
             echo 'Tomcat URL: http://localhost:8082/wwp/'
             echo 'Docker URL: http://localhost:8083/wwp/'
             echo 'Docker Image: bussar/wwp:1.0.0'
+            echo 'Kubernetes Deployment: SUCCESS'
+            echo 'Kubernetes Application: http://localhost:30080/wwp/'
         }
 
         failure {
