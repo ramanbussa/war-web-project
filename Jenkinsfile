@@ -1,8 +1,8 @@
-
 pipeline {
     agent any
 
-    // Check GitHub for changes approximately every 2 minutes
+    // Optional: Check GitHub for changes approximately every 2 minutes
+    // Uncomment only if SCM polling is required.
     // triggers {
     //     pollSCM('H/2 * * * *')
     // }
@@ -26,7 +26,8 @@ pipeline {
         WAR_FILE = 'wwp-1.0.0.war'
         SONAR_PROJECT = 'wwp'
 
-        // Docker Hub Configuration
+        // Docker Desktop executable on this Windows machine
+        DOCKER_EXE = 'C:/Users/Bussa/AppData/Local/Programs/DockerDesktop/resources/bin/docker.exe'
         DOCKER_IMAGE = 'bussar/wwp:1.0.0'
         DOCKER_CONTAINER = 'wwp-container'
         DOCKER_PORT = '8083'
@@ -42,7 +43,41 @@ pipeline {
             }
         }
 
-        // 2. Clean previous build
+        // 2. Verify required tools and Docker Engine connectivity
+        stage('Verify Environment') {
+            steps {
+                bat '''
+                    echo ===== Verify Java =====
+                    java -version
+                    if errorlevel 1 exit /b 1
+
+                    echo ===== Verify Maven =====
+                    mvn -version
+                    if errorlevel 1 exit /b 1
+
+                    echo ===== Verify Docker CLI =====
+                    if not exist "%DOCKER_EXE%" (
+                        echo ERROR: Docker executable not found: %DOCKER_EXE%
+                        exit /b 1
+                    )
+
+                    "%DOCKER_EXE%" --version
+                    if errorlevel 1 exit /b 1
+
+                    echo ===== Verify Docker Engine =====
+                    "%DOCKER_EXE%" info
+                    if errorlevel 1 (
+                        echo ERROR: Jenkins cannot connect to Docker Engine.
+                        echo Check Docker Desktop status and Jenkins service account.
+                        exit /b 1
+                    )
+
+                    echo Environment verification successful.
+                '''
+            }
+        }
+
+        // 3. Clean previous build
         stage('Maven Clean') {
             steps {
                 echo 'Cleaning previous build files'
@@ -50,7 +85,7 @@ pipeline {
             }
         }
 
-        // 3. Compile Java code
+        // 4. Compile Java code
         stage('Compile') {
             steps {
                 echo 'Compiling Java source code'
@@ -58,7 +93,7 @@ pipeline {
             }
         }
 
-        // 4. Execute unit tests
+        // 5. Execute unit tests
         stage('Unit Tests') {
             steps {
                 echo 'Running unit tests'
@@ -74,11 +109,10 @@ pipeline {
             }
         }
 
-        // 5. Package WAR file
+        // 6. Package WAR file
         stage('Package WAR') {
             steps {
                 echo 'Packaging application into WAR file'
-
                 bat 'mvn package -DskipTests'
 
                 script {
@@ -89,7 +123,7 @@ pipeline {
             }
         }
 
-        // 6. SonarQube code analysis
+        // 7. SonarQube code analysis
         stage('SonarQube Analysis') {
             steps {
                 echo 'Starting SonarQube code analysis'
@@ -97,49 +131,40 @@ pipeline {
                 withSonarQubeEnv('SonarQube-Server') {
                     bat '''
                         mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar
-
                         if errorlevel 1 exit /b 1
                     '''
                 }
             }
         }
 
-        // 7. Wait for SonarQube Quality Gate
-        // Enable after configuring SonarQube webhook
+        // 8. Optional Quality Gate
+        // Enable after configuring the SonarQube webhook in Jenkins.
         // stage('Quality Gate') {
         //     steps {
-        //         echo 'Waiting for SonarQube Quality Gate result'
-        //
         //         timeout(time: 5, unit: 'MINUTES') {
         //             script {
-        //                 def qualityGate = waitForQualityGate(
-        //                     abortPipeline: false
-        //                 )
-        //
+        //                 def qualityGate = waitForQualityGate(abortPipeline: false)
         //                 echo "Quality Gate Status: ${qualityGate.status}"
         //             }
         //         }
         //     }
         // }
 
-        // 8. Upload WAR to Nexus
+        // 9. Upload WAR to Nexus
         stage('Upload to Nexus') {
             steps {
                 echo 'Uploading WAR file to Nexus Repository'
-
                 bat '''
                     mvn deploy -DskipTests
-
                     if errorlevel 1 exit /b 1
                 '''
             }
         }
 
-        // 9. Archive WAR in Jenkins
+        // 10. Archive WAR in Jenkins
         stage('Archive WAR') {
             steps {
                 echo 'Archiving WAR file in Jenkins'
-
                 archiveArtifacts(
                     artifacts: 'target/wwp-1.0.0.war',
                     fingerprint: true
@@ -147,7 +172,7 @@ pipeline {
             }
         }
 
-        // 10. Download WAR from Nexus
+        // 11. Download WAR from Nexus
         stage('Download from Nexus') {
             steps {
                 echo 'Downloading WAR file from Nexus'
@@ -174,7 +199,7 @@ pipeline {
             }
         }
 
-        // 11. Deploy WAR to Tomcat
+        // 12. Deploy WAR to Tomcat
         stage('Deploy to Tomcat') {
             steps {
                 echo 'Deploying WAR file to Tomcat'
@@ -203,8 +228,8 @@ pipeline {
             }
         }
 
-        // 12. Tomcat application health check
-        stage('Health Check') {
+        // 13. Tomcat application health check
+        stage('Tomcat Health Check') {
             steps {
                 echo 'Checking deployed Tomcat application'
 
@@ -214,13 +239,13 @@ pipeline {
             }
         }
 
-        // 13. Build Docker Image
+        // 14. Build Docker Image
         stage('Docker Build') {
             steps {
                 echo 'Building Docker image'
 
                 bat '''
-                    docker build --pull -t "%DOCKER_IMAGE%" .
+                    "%DOCKER_EXE%" build --pull -t "%DOCKER_IMAGE%" .
 
                     if errorlevel 1 (
                         echo ERROR: Docker image build failed.
@@ -232,7 +257,7 @@ pipeline {
             }
         }
 
-        // 14. Push Docker Image to Docker Hub
+        // 15. Push Docker Image to Docker Hub
         stage('Push to Docker Hub') {
             steps {
                 echo 'Pushing Docker image to Docker Hub'
@@ -245,7 +270,7 @@ pipeline {
                     )
                 ]) {
                     bat '''
-                        echo %DOCKERHUB_PSW% | docker login ^
+                        echo %DOCKERHUB_PSW% | "%DOCKER_EXE%" login ^
                             -u "%DOCKERHUB_USR%" ^
                             --password-stdin
 
@@ -254,28 +279,28 @@ pipeline {
                             exit /b 1
                         )
 
-                        docker push "%DOCKER_IMAGE%"
+                        "%DOCKER_EXE%" push "%DOCKER_IMAGE%"
 
                         if errorlevel 1 (
                             echo ERROR: Docker image push failed.
+                            "%DOCKER_EXE%" logout
                             exit /b 1
                         )
 
                         echo Docker image uploaded successfully.
-
-                        docker logout
+                        "%DOCKER_EXE%" logout
                     '''
                 }
             }
         }
 
-        // 15. Pull image and create Docker container
+        // 16. Pull image and create Docker container
         stage('Run Docker Container') {
             steps {
                 echo 'Pulling Docker image from Docker Hub'
 
                 bat '''
-                    docker pull "%DOCKER_IMAGE%"
+                    "%DOCKER_EXE%" pull "%DOCKER_IMAGE%"
 
                     if errorlevel 1 (
                         echo ERROR: Docker image pull failed.
@@ -284,9 +309,9 @@ pipeline {
 
                     echo Docker image downloaded successfully.
 
-                    docker rm -f "%DOCKER_CONTAINER%" >NUL 2>&1
+                    "%DOCKER_EXE%" rm -f "%DOCKER_CONTAINER%" >NUL 2>&1
 
-                    docker run -d ^
+                    "%DOCKER_EXE%" run -d ^
                         --name "%DOCKER_CONTAINER%" ^
                         --restart unless-stopped ^
                         -p %DOCKER_PORT%:8080 ^
@@ -302,7 +327,7 @@ pipeline {
             }
         }
 
-        // 16. Docker application health check
+        // 17. Docker application health check
         stage('Docker Health Check') {
             steps {
                 echo 'Checking Docker application'
@@ -318,12 +343,9 @@ pipeline {
     post {
         success {
             echo 'SUCCESS: Complete CI/CD Pipeline executed successfully.'
-
             echo 'Tomcat Application: http://localhost:8082/wwp/'
-
             echo 'Docker Application: http://localhost:8083/wwp/'
-
-            echo 'Docker Image: Docker Hub / wwp:1.0.0'
+            echo 'Docker Image: bussar/wwp:1.0.0'
         }
 
         failure {
