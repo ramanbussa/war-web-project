@@ -156,20 +156,22 @@ pipeline {
             }
         }
 
+
         stage('Docker Build') {
             steps {
                 bat '''
-                    "%DOCKER_EXE%" buildx build --pull --load -t "%DOCKER_IMAGE%" .
-
+                    "%DOCKER_EXE%" build --pull -t "%DOCKER_IMAGE%" .
+        
                     if errorlevel 1 (
                         echo ERROR: Docker image build failed.
                         exit /b 1
                     )
-
+        
                     echo Docker image built successfully.
                 '''
             }
         }
+
 
         stage('Push to Docker Hub') {
             steps {
