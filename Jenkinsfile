@@ -173,36 +173,7 @@ pipeline {
         }
 
 
-stage('Test Docker Hub Authentication') {
-    steps {
-        withCredentials([
-            usernamePassword(
-                credentialsId: 'dockerhub-credentials',
-                usernameVariable: 'DH_USER',
-                passwordVariable: 'DH_TOKEN'
-            )
-        ]) {
-            powershell '''
-                $user = $env:DH_USER.Trim()
-                $token = $env:DH_TOKEN.Trim()
 
-                Write-Host "Username: $user"
-                Write-Host "Token length: $($token.Length)"
-
-                $token | & $env:DOCKER_EXE login -u $user --password-stdin
-
-                if ($LASTEXITCODE -ne 0) {
-                    throw "Docker Hub authentication failed."
-                }
-
-                Write-Host "Docker Hub authentication successful."
-                & $env:DOCKER_EXE logout
-            '''
-        }
-    }
-}
-
-        
 stage('Push to Docker Hub') {
     steps {
         withCredentials([
@@ -212,41 +183,34 @@ stage('Push to Docker Hub') {
                 passwordVariable: 'DOCKERHUB_TOKEN'
             )
         ]) {
-            powershell '''
-                $ErrorActionPreference = 'Stop'
+            bat '''
+                @echo off
+                echo Logging in to Docker Hub...
 
-                $username = $env:DOCKERHUB_USER.Trim()
-                $token = $env:DOCKERHUB_TOKEN.Trim()
+                echo(%DOCKERHUB_TOKEN%| "%DOCKER_EXE%" login -u "%DOCKERHUB_USER%" --password-stdin
 
-                Write-Host "Docker Hub username: $username"
-                Write-Host "Token received: $(-not [string]::IsNullOrWhiteSpace($token))"
-                Write-Host "Token length: $($token.Length)"
+                if errorlevel 1 (
+                    echo ERROR: Docker Hub login failed.
+                    exit /b 1
+                )
 
-                if ([string]::IsNullOrWhiteSpace($token)) {
-                    throw "Docker Hub token is empty."
-                }
+                echo Docker Hub login successful.
 
-                $token | & $env:DOCKER_EXE login -u $username --password-stdin
+                "%DOCKER_EXE%" push "%DOCKER_IMAGE%"
 
-                if ($LASTEXITCODE -ne 0) {
-                    throw "Docker Hub login failed."
-                }
+                if errorlevel 1 (
+                    echo ERROR: Docker Hub push failed.
+                    exit /b 1
+                )
 
-                Write-Host "Docker Hub login successful."
+                echo Docker image pushed successfully.
 
-                & $env:DOCKER_EXE push $env:DOCKER_IMAGE
-
-                if ($LASTEXITCODE -ne 0) {
-                    throw "Docker Hub push failed."
-                }
-
-                Write-Host "Docker image pushed successfully."
-
-                & $env:DOCKER_EXE logout
+                "%DOCKER_EXE%" logout
             '''
         }
     }
 }
+
 
         stage('Run Docker Container') {
             steps {
