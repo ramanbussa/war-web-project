@@ -1,3 +1,4 @@
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,12 +16,25 @@ spec:
         app: mywarweb
     spec:
       containers:
-      - name: mywarweb
-        image: bussar/mywarweb:latest
-        ports:
-        - containerPort: 8080
+        - name: mywarweb
+          image: bussar/wwp:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /wwp/
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /wwp/
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
 ---
-# ClusterIP Service (default internal access)
+# ClusterIP Service - Internal cluster access
 apiVersion: v1
 kind: Service
 metadata:
@@ -34,7 +48,7 @@ spec:
       targetPort: 8080
   type: ClusterIP
 ---
-# NodePort Service (access via Node IP + NodePort)
+# NodePort Service - External access through node port
 apiVersion: v1
 kind: Service
 metadata:
@@ -46,10 +60,10 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 8080
-      nodePort: 30080   # fixed NodePort
+      nodePort: 30080
   type: NodePort
 ---
-# LoadBalancer Service (works in cloud environments)
+# LoadBalancer Service - External access
 apiVersion: v1
 kind: Service
 metadata:
@@ -63,22 +77,21 @@ spec:
       targetPort: 8080
   type: LoadBalancer
 ---
-# Ingress Resource
+# Ingress Resource - Host-based HTTP routing
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: mywarweb-ingress
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
+  ingressClassName: nginx
   rules:
-  - host: mywarweb.local
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: mywarweb-clusterip
-            port:
-              number: 80
+    - host: mywarweb.local
+      http:
+        paths:
+          - path: /wwp
+            pathType: Prefix
+            backend:
+              service:
+                name: mywarweb-clusterip
+                port:
+                  number: 80
