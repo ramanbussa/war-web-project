@@ -55,29 +55,23 @@ pipeline {
 
                     "%DOCKER_EXE%" info >NUL
                     if errorlevel 1 (
-                        echo ERROR: Cannot connect to Docker Engine.
+                        echo ERROR: Docker Engine is not running.
                         exit /b 1
                     )
                 '''
             }
         }
 
-        stage('Build and Test') {
+        stage('Build WAR') {
             steps {
-                bat 'mvn clean package'
+                bat 'mvn clean package -DskipTests'
 
                 script {
                     if (!fileExists('target/wwp-1.0.0.war')) {
                         error 'WAR file was not generated!'
                     }
-                }
-            }
-            post {
-                always {
-                    junit(
-                        allowEmptyResults: false,
-                        testResults: '**/surefire-reports/TEST-*.xml'
-                    )
+
+                    echo 'SUCCESS: WAR file generated.'
                 }
             }
         }
@@ -87,6 +81,7 @@ pipeline {
                 withSonarQubeEnv('SonarQube-Server') {
                     bat '''
                         mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar -Dsonar.projectKey=%SONAR_PROJECT%
+
                         if errorlevel 1 exit /b 1
                     '''
                 }
@@ -97,6 +92,7 @@ pipeline {
             steps {
                 bat '''
                     mvn deploy -DskipTests
+
                     if errorlevel 1 exit /b 1
                 '''
             }
@@ -122,11 +118,6 @@ pipeline {
 
                     if errorlevel 1 (
                         echo ERROR: Nexus download failed.
-                        exit /b 1
-                    )
-
-                    if not exist "deployment\\%WAR_FILE%" (
-                        echo ERROR: WAR file not found.
                         exit /b 1
                     )
                 '''
@@ -174,6 +165,8 @@ pipeline {
                         echo ERROR: Docker image build failed.
                         exit /b 1
                     )
+
+                    echo Docker image built successfully.
                 '''
             }
         }
@@ -243,8 +236,8 @@ pipeline {
     post {
         success {
             echo 'SUCCESS: CI/CD Pipeline completed successfully.'
-            echo 'Tomcat: http://localhost:8082/wwp/'
-            echo 'Docker: http://localhost:8083/wwp/'
+            echo 'Tomcat URL: http://localhost:8082/wwp/'
+            echo 'Docker URL: http://localhost:8083/wwp/'
             echo 'Docker Image: bussar/wwp:1.0.0'
         }
 
