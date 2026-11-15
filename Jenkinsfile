@@ -271,68 +271,65 @@ stage('Verify Kubernetes Access') {
 
          
         // 18. Deploy application to Kubernetes
-        stage('Deploy to Kubernetes') {
-            steps {
-                echo 'Deploying application to Docker Desktop Kubernetes'
+       
+stage('Deploy to Kubernetes') {
+    steps {
+        echo 'Deploying application to Docker Desktop Kubernetes'
 
-                bat '''
-                    echo ===== Verify Kubernetes CLI =====
-                    where kubectl
+        bat '''
+            echo ===== Verify Kubernetes CLI =====
+            "%KUBECTL_EXE%" version --client
 
-                    if errorlevel 1 (
-                        echo ERROR: kubectl is not available to Jenkins.
-                        exit /b 1
-                    )
+            if errorlevel 1 (
+                echo ERROR: kubectl is not working.
+                exit /b 1
+            )
 
-                    echo ===== Verify Kubernetes Context =====
-                    kubectl config current-context
+            echo ===== Verify Kubernetes Context =====
+            "%KUBECTL_EXE%" config current-context
 
-                    if errorlevel 1 (
-                        echo ERROR: Jenkins cannot access Kubernetes configuration.
-                        exit /b 1
-                    )
+            echo ===== Verify Kubernetes Node =====
+            "%KUBECTL_EXE%" get nodes
 
-                    echo ===== Verify Kubernetes Node =====
-                    kubectl get nodes
+            if errorlevel 1 (
+                echo ERROR: Kubernetes cluster is not accessible.
+                exit /b 1
+            )
 
-                    if errorlevel 1 (
-                        echo ERROR: Kubernetes cluster is not accessible.
-                        exit /b 1
-                    )
+            echo ===== Verify Deployment YAML =====
+            if not exist "k8s\\deploy.yml" (
+                echo ERROR: k8s/deploy.yml file not found.
+                exit /b 1
+            )
 
-                    echo ===== Verify Deployment YAML =====
-                    if not exist "k8s\\deploy.yml" (
-                        echo ERROR: k8s/deploy.yml file not found.
-                        exit /b 1
-                    )
+            echo ===== Apply Kubernetes Manifest =====
+            "%KUBECTL_EXE%" apply -f k8s/deploy.yml
 
-                    echo ===== Apply Kubernetes Manifest =====
-                    kubectl apply -f k8s/deploy.yml
+            if errorlevel 1 (
+                echo ERROR: Kubernetes deployment failed.
+                exit /b 1
+            )
 
-                    if errorlevel 1 (
-                        echo ERROR: Kubernetes deployment failed.
-                        exit /b 1
-                    )
+            echo ===== Wait for Deployment =====
+            "%KUBECTL_EXE%" rollout status deployment/mywarweb-deployment --timeout=180s
 
-                    echo ===== Wait for Deployment =====
-                    kubectl rollout status deployment/mywarweb-deployment --timeout=180s
+            if errorlevel 1 (
+                echo ERROR: Kubernetes rollout failed.
+                "%KUBECTL_EXE%" describe deployment mywarweb-deployment
+                "%KUBECTL_EXE%" get pods
+                exit /b 1
+            )
 
-                    if errorlevel 1 (
-                        echo ERROR: Kubernetes rollout failed.
-                        kubectl describe deployment mywarweb-deployment
-                        kubectl get pods
-                        exit /b 1
-                    )
+            echo ===== Kubernetes Deployment Status =====
+            "%KUBECTL_EXE%" get deployments
+            "%KUBECTL_EXE%" get pods
+            "%KUBECTL_EXE%" get services
 
-                    echo ===== Kubernetes Deployment Status =====
-                    kubectl get deployments
-                    kubectl get pods
-                    kubectl get services
+            echo Kubernetes deployment completed successfully.
+        '''
+    }
+}
 
-                    echo Kubernetes deployment completed successfully.
-                '''
-            }
-        }
 
     }
 
